@@ -178,6 +178,20 @@ const App: React.FC = () => {
     }
   };
 
+  // --- Access Control ---
+  const accessibleLayouts = React.useMemo(() => {
+      if (!profile || profile.role === 'admin') return layouts;
+      return layouts.filter(l => 
+          !l.divisionIds || l.divisionIds.length === 0 || (profile.divisionId && l.divisionIds.includes(profile.divisionId))
+      );
+  }, [layouts, profile]);
+
+  const accessibleItems = React.useMemo(() => {
+      if (!profile || profile.role === 'admin') return items;
+      const allowedIds = new Set(accessibleLayouts.map(l => l.id));
+      return items.filter(i => allowedIds.has(i.location.layoutId));
+  }, [items, accessibleLayouts, profile]);
+
   if (authLoading) {
       return (
           <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">
@@ -299,7 +313,13 @@ const App: React.FC = () => {
           <LayoutSetup onSaveLayout={handleSaveLayout} layouts={layouts} />
         )}
         {phase === 'SEARCH' && (
-          <MainView layouts={layouts} items={items} onUnstock={handleUnstock} />
+          <MainView 
+            layouts={accessibleLayouts} 
+            items={accessibleItems} 
+            onUnstock={handleUnstock} 
+            isAdmin={profile?.role === 'admin'}
+            onUpdateLayout={handleSaveLayout}
+          />
         )}
         {phase === 'INBOUND' && (
            <Inbound 
