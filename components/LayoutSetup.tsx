@@ -390,7 +390,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialLayout, divisions, o
                         placeholder="e.g. Top, Middle, Bottom"
                         className="w-full mt-1 bg-gray-900 border border-gray-600 rounded p-2 text-sm focus:border-blue-500 outline-none h-16 resize-none"
                     />
-                    <p className="text-[10px] text-gray-500 mt-1">Comma separated</p>
+                    <p className="text-[10px] text-gray-500 mt-1">Comma separated (e.g. A, B, C, D)</p>
                  </div>
                  
                  <div className="pt-2 space-y-2">
