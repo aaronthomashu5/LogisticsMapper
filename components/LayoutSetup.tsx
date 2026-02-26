@@ -38,11 +38,12 @@ export const LayoutSetup: React.FC<LayoutSetupProps> = ({ layouts, onSaveLayout 
   return (
     <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-140px)]">
       {/* Sidebar for Layout Selection */}
-      <div className="w-full lg:w-72 bg-gray-800 rounded-lg p-4 flex flex-col gap-4 flex-shrink-0 shadow-lg h-full overflow-hidden">
+      <div className="w-full lg:w-72 bg-gray-800 rounded-lg p-4 flex flex-col gap-4 flex-shrink-0 shadow-lg h-auto max-h-96 lg:h-full lg:max-h-none overflow-hidden">
          <div className="flex items-center justify-between pb-2 border-b border-gray-700">
              <h2 className="text-lg font-bold text-white flex items-center gap-2">
                 <LayoutTemplate size={20} className="text-blue-400"/>
-                Warehouses
+                <span className="hidden sm:inline">Warehouses</span>
+                <span className="sm:hidden">Layouts</span>
              </h2>
              <span className="text-xs bg-gray-700 px-2 py-1 rounded text-gray-300">{layouts.length}</span>
          </div>
@@ -272,7 +273,7 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialLayout, divisions, o
                 />
             </div>
             
-            <div className="flex items-end gap-6">
+            <div className="flex items-end gap-3 sm:gap-6">
                 <div>
                     <label className="block text-xs text-center text-gray-400 mb-1">Rows</label>
                     <div className="flex items-center gap-1 bg-gray-700 rounded-md p-1">
@@ -323,9 +324,9 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialLayout, divisions, o
       </div>
       
       {/* Editor Grid Area */}
-      <div className="flex-1 flex gap-4 min-h-0">
+      <div className="flex-1 flex flex-col lg:flex-row gap-4 min-h-0 relative">
         <div 
-            className="flex-1 overflow-auto bg-gray-800 p-4 rounded-lg shadow-inner custom-scrollbar relative" 
+            className="flex-1 overflow-auto bg-gray-800 p-4 rounded-lg shadow-inner custom-scrollbar relative min-h-[300px]" 
             onMouseUp={() => setIsDragging(false)}
         >
            <div className="inline-block border border-gray-700/30">
@@ -337,20 +338,20 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialLayout, divisions, o
            </div>
            
            {/* Hint */}
-           <div className="absolute top-4 right-4 bg-gray-900/80 backdrop-blur text-gray-400 text-xs px-3 py-1.5 rounded-full pointer-events-none border border-gray-700">
+           <div className="absolute top-4 right-4 bg-gray-900/80 backdrop-blur text-gray-400 text-xs px-3 py-1.5 rounded-full pointer-events-none border border-gray-700 hidden sm:block">
              Drag to select multiple cells
            </div>
         </div>
         
-        {/* Floating Property Editor */}
+        {/* Property Editor - Bottom on mobile, Right on desktop */}
         {selectedCells.size > 0 && (
-          <div className="w-64 flex-shrink-0 bg-gray-800 p-4 rounded-lg shadow-xl border border-gray-700 flex flex-col gap-4 animate-in slide-in-from-right-4 fade-in">
+          <div className="w-full lg:w-72 flex-shrink-0 bg-gray-800 p-4 rounded-lg shadow-xl border border-gray-700 flex flex-col gap-4 animate-in slide-in-from-bottom-4 lg:slide-in-from-right-4 fade-in z-20">
              <div className="flex justify-between items-center pb-2 border-b border-gray-700">
                 <h3 className="font-bold text-white">{selectedCells.size} Selected</h3>
                 <button onClick={clearSelection} className="text-gray-400 hover:text-white"><X size={16}/></button>
              </div>
              
-             <div className="space-y-4">
+             <div className="space-y-4 max-h-[40vh] lg:max-h-none overflow-y-auto custom-scrollbar">
                  <div>
                     <label className="text-xs text-gray-400 font-medium">Shelf Label</label>
                     <input
@@ -361,29 +362,35 @@ const LayoutEditor: React.FC<LayoutEditorProps> = ({ initialLayout, divisions, o
                         onKeyDown={(e) => {
                              if(e.key === 'Enter') {
                                  const racks = (document.getElementById('rackCountInput') as HTMLInputElement).value;
-                                 updateSelectedShelves((e.target as HTMLInputElement).value, parseInt(racks) || -1);
+                                 const rackLabelsStr = (document.getElementById('rackLabelsInput') as HTMLTextAreaElement).value;
+                                 const rackLabels = rackLabelsStr.trim() 
+                                    ? rackLabelsStr.split(',').map(s => s.trim()).filter(s => s) 
+                                    : undefined;
+                                 updateSelectedShelves((e.target as HTMLInputElement).value, parseInt(racks) || -1, rackLabels);
                              }
                         }}
                     />
                  </div>
-                 <div>
-                    <label className="text-xs text-gray-400 font-medium">Rack Count</label>
-                    <input
-                        type="number"
-                        id="rackCountInput"
-                        placeholder="e.g. 4"
-                        className="w-full mt-1 bg-gray-900 border border-gray-600 rounded p-2 text-sm focus:border-blue-500 outline-none"
-                    />
+                 <div className="grid grid-cols-2 gap-2">
+                    <div>
+                        <label className="text-xs text-gray-400 font-medium">Rack Count</label>
+                        <input
+                            type="number"
+                            id="rackCountInput"
+                            placeholder="e.g. 4"
+                            className="w-full mt-1 bg-gray-900 border border-gray-600 rounded p-2 text-sm focus:border-blue-500 outline-none"
+                        />
+                    </div>
                  </div>
                  
                  <div>
-                    <label className="text-xs text-gray-400 font-medium">Rack Labels (Optional, comma separated)</label>
+                    <label className="text-xs text-gray-400 font-medium">Rack Labels (Optional)</label>
                     <textarea
                         id="rackLabelsInput"
                         placeholder="e.g. Top, Middle, Bottom"
                         className="w-full mt-1 bg-gray-900 border border-gray-600 rounded p-2 text-sm focus:border-blue-500 outline-none h-16 resize-none"
                     />
-                    <p className="text-[10px] text-gray-500 mt-1">Leave empty to use numbers (1, 2, 3...)</p>
+                    <p className="text-[10px] text-gray-500 mt-1">Comma separated</p>
                  </div>
                  
                  <div className="pt-2 space-y-2">
