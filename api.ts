@@ -297,6 +297,14 @@ export const api = {
     }));
   },
 
+  async deletePendingItem(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('pending_items')
+      .delete()
+      .eq('id', id);
+    if (error) throw new Error(error.message);
+  },
+
   async allocateItem(pendingId: string, location: StockItem['location']): Promise<void> {
     const user = (await supabase.auth.getUser()).data.user;
     if (!user) throw new Error("User not authenticated");
@@ -395,6 +403,80 @@ export const api = {
     if (txnError) throw new Error(txnError.message);
   },
 
+  async reallocateItem(itemId: string, quantity: number, newLocation: StockItem['location']): Promise<void> {
+    const user = (await supabase.auth.getUser()).data.user;
+    if (!user) throw new Error("User not authenticated");
+
+    // 1. Get Source Item
+    const { data: sourceItem, error: fetchError } = await supabase
+        .from('stock_items')
+        .select('*')
+        .eq('id', itemId)
+        .single();
+
+    if (fetchError || !sourceItem) throw new Error("Source item not found");
+    if (sourceItem.quantity < quantity) throw new Error("Insufficient quantity");
+
+    // 2. Decrement Source
+    const newSourceQty = sourceItem.quantity - quantity;
+    if (newSourceQty === 0) {
+        await supabase.from('stock_items').delete().eq('id', itemId);
+    } else {
+        await supabase.from('stock_items').update({ quantity: newSourceQty }).eq('id', itemId);
+    }
+
+    // 3. Increment/Create Destination
+    let query = supabase.from('stock_items').select('*')
+        .eq('layout_id', newLocation.layoutId)
+        .eq('shelf_id', newLocation.shelfId)
+        .eq('rack_number', newLocation.rackNumber)
+        .eq('name', sourceItem.name);
+    
+    if (sourceItem.lot_number) query = query.eq('lot_number', sourceItem.lot_number);
+    else query = query.is('lot_number', null);
+
+    const { data: existingDestItems } = await query;
+    const existingDestItem = existingDestItems?.[0];
+    let destItemId;
+
+    if (existingDestItem) {
+        destItemId = existingDestItem.id;
+        await supabase.from('stock_items').update({
+            quantity: existingDestItem.quantity + quantity
+        }).eq('id', destItemId);
+    } else {
+        const { data: newItem } = await supabase.from('stock_items').insert({
+            user_id: user.id,
+            name: sourceItem.name,
+            quantity: quantity,
+            unit: sourceItem.unit,
+            lot_number: sourceItem.lot_number,
+            specification: sourceItem.specification,
+            layout_id: newLocation.layoutId,
+            shelf_id: newLocation.shelfId,
+            rack_number: newLocation.rackNumber
+        }).select().single();
+        destItemId = newItem.id;
+    }
+
+    // 4. Log Transaction (Move)
+    // Note: Requires new columns in transactions table: new_layout_id, new_shelf_id, new_rack_number
+    await supabase.from('transactions').insert({
+        user_id: user.id,
+        stock_item_id: destItemId,
+        item_name_snapshot: sourceItem.name,
+        quantity_changed: quantity, // Positive to indicate it exists now? Or maybe 0? Let's use quantity moved.
+        timestamp: Date.now(),
+        layout_id_snapshot: sourceItem.layout_id,
+        shelf_id_snapshot: sourceItem.shelf_id,
+        rack_number_snapshot: sourceItem.rack_number,
+        new_layout_id: newLocation.layoutId,
+        new_shelf_id: newLocation.shelfId,
+        new_rack_number: newLocation.rackNumber,
+        is_restocked: false
+    });
+  },
+
   async getTransactions(): Promise<Transaction[]> {
     const { data, error } = await supabase
       .from('transactions')
@@ -414,6 +496,11 @@ export const api = {
             shelfId: t.shelf_id_snapshot,
             rackNumber: t.rack_number_snapshot
         },
+        newLocation: t.new_layout_id ? {
+            layoutId: t.new_layout_id,
+            shelfId: t.new_shelf_id,
+            rackNumber: t.new_rack_number
+        } : undefined,
         isRestocked: t.is_restocked
     }));
   },
