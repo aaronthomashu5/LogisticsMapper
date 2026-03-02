@@ -100,7 +100,7 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
         Analyze this delivery order image. Extract all items in a structured JSON format.
         Return ONLY a JSON array of objects with the following fields:
         - name (string): Item description or name
-        - quantity (number): The quantity has to be extracted based on KGM on priority not  cartons as exact quantity here will be in decimals so go for exact qty and its unit.
+        - quantity (number): The quantity has to be extracted based on KGM on priority not if Unit CT and Base unit if unit is PCE.
         - unit (string): The unit of measure (e.g., PCS, KG, BOX, SET). Default to 'PCS' if unsure.
         - lotNumber (string, optional): Lot or batch number if visible
         - specification (string, optional): Any technical specs (e.g., dimensions, material)
