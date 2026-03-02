@@ -48,7 +48,7 @@ export interface PendingItem {
   unit: string;
   lotNumber?: string;
   specification?: string;
-  source: 'EXCEL' | 'OCR' | 'MANUAL';
+  source: 'EXCEL' | 'OCR' | 'MANUAL' | 'AI';
 }
 
 export interface Transaction {
@@ -58,6 +58,11 @@ export interface Transaction {
   quantityChanged: number; 
   timestamp: number;
   originalLocation: {
+    layoutId: string;
+    shelfId: string;
+    rackNumber: number;
+  };
+  newLocation?: {
     layoutId: string;
     shelfId: string;
     rackNumber: number;
