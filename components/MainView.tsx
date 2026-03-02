@@ -1,16 +1,18 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import type { Layout, StockItem, Shelf } from '../types';
+import type { Layout, StockItem, Shelf, PendingItem } from '../types';
 import { 
   Search, X, Package, Warehouse, Layers, MinusCircle, 
   Filter, ChevronLeft, ChevronRight, ArrowUpDown, AlertTriangle, MapPin,
-  Home, Grid, List, Pencil, Check
+  Home, Grid, List, Pencil, Check, Plus, ArrowRight
 } from 'lucide-react';
 
 interface MainViewProps {
   layouts: Layout[];
   items: StockItem[];
   onUnstock: (itemId: string, amount: number) => void;
+  onReallocate: (itemId: string, quantity: number, newLocation: StockItem['location']) => void;
+  onDirectAdd?: (item: PendingItem, location: StockItem['location']) => void;
   isAdmin?: boolean;
   onUpdateLayout?: (layout: Layout) => void;
 }
@@ -20,7 +22,7 @@ type SortDirection = 'asc' | 'desc';
 
 const ITEMS_PER_PAGE = 10;
 
-export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, isAdmin = false, onUpdateLayout }) => {
+export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, onReallocate, onDirectAdd, isAdmin = false, onUpdateLayout }) => {
   // Search & Filter State
   const [query, setQuery] = useState('');
   const [showLowStock, setShowLowStock] = useState(false);
@@ -36,6 +38,16 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, i
   const [editingRack, setEditingRack] = useState<number | null>(null);
   const [editValue, setEditValue] = useState('');
 
+  // Add Item State
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addForm, setAddForm] = useState({
+    name: '',
+    quantity: '',
+    unit: 'PCS',
+    lotNumber: '',
+    specification: ''
+  });
+
   // Sort & Pagination State (For Search Results)
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -44,6 +56,23 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, i
   // Selection State (For Search Result Detail)
   const [selectedItem, setSelectedItem] = useState<StockItem | null>(null);
   const [unstockAmount, setUnstockAmount] = useState<string>('');
+
+  // Reallocate State
+  const [reallocateState, setReallocateState] = useState<{
+    isOpen: boolean;
+    item: StockItem | null;
+    quantity: string;
+    targetLayoutId: string;
+    targetShelfId: string;
+    targetRackNumber: number | null;
+  }>({
+    isOpen: false,
+    item: null,
+    quantity: '',
+    targetLayoutId: '',
+    targetShelfId: '',
+    targetRackNumber: null
+  });
 
   // --- Helpers ---
   const activeLayout = useMemo(() => 
@@ -143,6 +172,36 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, i
       setUnstockAmount('');
   };
 
+  const openReallocate = (item: StockItem) => {
+      setReallocateState({
+          isOpen: true,
+          item,
+          quantity: item.quantity.toString(),
+          targetLayoutId: item.location.layoutId,
+          targetShelfId: '',
+          targetRackNumber: null
+      });
+  };
+
+  const handleReallocateSubmit = () => {
+      const { item, quantity, targetLayoutId, targetShelfId, targetRackNumber } = reallocateState;
+      if (!item || !quantity || !targetLayoutId || !targetShelfId || !targetRackNumber) return;
+      
+      const qty = parseFloat(quantity);
+      if (isNaN(qty) || qty <= 0 || qty > item.quantity) {
+          alert("Invalid quantity");
+          return;
+      }
+
+      onReallocate(item.id, qty, {
+          layoutId: targetLayoutId,
+          shelfId: targetShelfId,
+          rackNumber: targetRackNumber
+      });
+      
+      setReallocateState({ ...reallocateState, isOpen: false });
+  };
+
   const handleSaveRackLabel = (rackIndex: number) => {
     if (!activeLayout || !activeShelf || !onUpdateLayout) return;
 
@@ -177,6 +236,37 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, i
     
     onUpdateLayout(newLayout);
     setEditingRack(null);
+  };
+
+  const handleAddSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addForm.name || !addForm.quantity || !onDirectAdd || !activeLayout || !activeShelf || !viewPath.rackNumber) return;
+
+    const newItem: PendingItem = {
+      id: `manual-${Date.now()}`,
+      name: addForm.name,
+      quantity: parseFloat(addForm.quantity),
+      unit: addForm.unit,
+      lotNumber: addForm.lotNumber,
+      specification: addForm.specification,
+      source: 'MANUAL'
+    };
+
+    const location = {
+        layoutId: activeLayout.id,
+        shelfId: activeShelf.id,
+        rackNumber: viewPath.rackNumber
+    };
+
+    onDirectAdd(newItem, location);
+    setShowAddModal(false);
+    setAddForm({
+        name: '',
+        quantity: '',
+        unit: 'PCS',
+        lotNumber: '',
+        specification: ''
+    });
   };
 
   // Reset view when searching
@@ -499,7 +589,14 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, i
                         {rackItems.length === 0 ? (
                             <div className="p-12 text-center text-gray-500">
                                 <Package size={48} className="mx-auto mb-4 opacity-20"/>
-                                <p>This rack is empty.</p>
+                                <p className="mb-4">This rack is empty.</p>
+                                <button 
+                                    onClick={() => setShowAddModal(true)}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md font-medium inline-flex items-center gap-2 transition-colors"
+                                >
+                                    <Plus size={18} />
+                                    Add Material
+                                </button>
                             </div>
                         ) : (
                             rackItems.map(item => (
@@ -533,6 +630,13 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, i
                                             >
                                                 Unstock
                                             </button>
+                                            <button 
+                                                onClick={() => openReallocate(item)}
+                                                className="bg-blue-900/50 hover:bg-blue-600 text-blue-200 hover:text-white px-3 py-1 rounded text-sm font-medium border border-blue-800 hover:border-blue-500 transition-colors flex items-center gap-1"
+                                                title="Move to another rack"
+                                            >
+                                                <ArrowRight size={14} /> Reallocate
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
@@ -541,6 +645,251 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, i
                     </div>
                 </div>
             )}
+        </div>
+      )}
+
+      {/* Add Material Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700 w-full max-w-md overflow-hidden">
+                <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-800">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                        <Plus size={20} className="text-blue-500"/> 
+                        Add Material to Rack {viewPath.rackNumber}
+                    </h3>
+                    <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-white">
+                        <X size={20} />
+                    </button>
+                </div>
+                
+                <form onSubmit={handleAddSubmit} className="p-4 space-y-4">
+                    <div>
+                        <label className="block text-xs font-medium text-gray-400 mb-1">Item Name / Description <span className="text-red-500">*</span></label>
+                        <input 
+                            type="text"
+                            required
+                            autoFocus
+                            placeholder="e.g. Welding Electrodes E6013"
+                            value={addForm.name}
+                            onChange={e => setAddForm({...addForm, name: e.target.value})}
+                            className="w-full bg-gray-900 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                        />
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Quantity <span className="text-red-500">*</span></label>
+                            <input 
+                                type="number"
+                                required
+                                min="0.01"
+                                step="any"
+                                placeholder="0"
+                                value={addForm.quantity}
+                                onChange={e => setAddForm({...addForm, quantity: e.target.value})}
+                                className="w-full bg-gray-900 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Unit</label>
+                            <input 
+                                list="units-list-main"
+                                value={addForm.unit}
+                                onChange={e => setAddForm({...addForm, unit: e.target.value.toUpperCase()})}
+                                className="w-full bg-gray-900 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                            />
+                            <datalist id="units-list-main">
+                                <option value="PCS" />
+                                <option value="KG" />
+                                <option value="BOX" />
+                                <option value="PKT" />
+                                <option value="SET" />
+                                <option value="ROLL" />
+                                <option value="M" />
+                            </datalist>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Lot Number (Optional)</label>
+                            <input 
+                                type="text"
+                                placeholder="e.g. L-2023-01"
+                                value={addForm.lotNumber}
+                                onChange={e => setAddForm({...addForm, lotNumber: e.target.value})}
+                                className="w-full bg-gray-900 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                            />
+                        </div>
+                        <div>
+                             <label className="block text-xs font-medium text-gray-400 mb-1">Specification (Optional)</label>
+                            <input 
+                                type="text"
+                                placeholder="e.g. 2.5mm"
+                                value={addForm.specification}
+                                onChange={e => setAddForm({...addForm, specification: e.target.value})}
+                                className="w-full bg-gray-900 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="pt-2 flex gap-3">
+                        <button 
+                            type="button" 
+                            onClick={() => setShowAddModal(false)}
+                            className="flex-1 px-4 py-2 rounded-md border border-gray-600 text-gray-300 hover:bg-gray-700 font-medium"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            type="submit"
+                            className="flex-1 px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center justify-center gap-2"
+                        >
+                            <Plus size={18} />
+                            Add Item
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+      )}
+
+      {/* Reallocate Modal */}
+      {reallocateState.isOpen && reallocateState.item && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-800">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                        <ArrowRight size={20} className="text-blue-500"/> 
+                        Reallocate Stock
+                    </h3>
+                    <button onClick={() => setReallocateState({ ...reallocateState, isOpen: false })} className="text-gray-400 hover:text-white">
+                        <X size={20} />
+                    </button>
+                </div>
+                
+                <div className="p-6 overflow-y-auto space-y-6">
+                    {/* Item Summary */}
+                    <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
+                        <div className="flex justify-between items-start">
+                            <div>
+                                <h4 className="font-bold text-white text-lg">{reallocateState.item.name}</h4>
+                                <div className="text-sm text-gray-400">
+                                    Current: {layouts.find(l => l.id === reallocateState.item?.location.layoutId)?.name} &gt; Shelf {reallocateState.item.location.shelfId} &gt; Rack {reallocateState.item.location.rackNumber}
+                                </div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-sm text-gray-400">Available</div>
+                                <div className="font-mono text-xl text-green-400">{reallocateState.item.quantity} {reallocateState.item.unit}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Quantity Input */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Quantity to Move</label>
+                        <input 
+                            type="number"
+                            value={reallocateState.quantity}
+                            onChange={(e) => setReallocateState({ ...reallocateState, quantity: e.target.value })}
+                            max={reallocateState.item.quantity}
+                            min={0.01}
+                            className="w-full bg-gray-900 border border-gray-600 rounded-md px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                        />
+                    </div>
+
+                    {/* Destination Selection */}
+                    <div className="space-y-4">
+                        <h4 className="font-bold text-gray-200 border-b border-gray-700 pb-2">Destination</h4>
+                        
+                        {/* 1. Layout */}
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1">Layout / Division</label>
+                            <select 
+                                value={reallocateState.targetLayoutId}
+                                onChange={(e) => setReallocateState({ 
+                                    ...reallocateState, 
+                                    targetLayoutId: e.target.value,
+                                    targetShelfId: '',
+                                    targetRackNumber: null
+                                })}
+                                className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                            >
+                                <option value="">Select Layout</option>
+                                {layouts.map(l => (
+                                    <option key={l.id} value={l.id}>{l.name}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* 2. Shelf (Visual) */}
+                        {reallocateState.targetLayoutId && (
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">Shelf</label>
+                                <div className="border border-gray-600 rounded-md overflow-hidden">
+                                    <LayoutViewer 
+                                        layout={layouts.find(l => l.id === reallocateState.targetLayoutId)!}
+                                        highlightedShelfId={reallocateState.targetShelfId}
+                                        onShelfClick={(shelf) => setReallocateState({
+                                            ...reallocateState,
+                                            targetShelfId: shelf.id,
+                                            targetRackNumber: null
+                                        })}
+                                    />
+                                </div>
+                                {reallocateState.targetShelfId && (
+                                    <div className="mt-1 text-sm text-blue-400 font-bold">
+                                        Selected: Shelf {layouts.find(l => l.id === reallocateState.targetLayoutId)?.shelves.get(reallocateState.targetShelfId)?.label}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* 3. Rack */}
+                        {reallocateState.targetShelfId && (
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">Rack</label>
+                                <select 
+                                    value={reallocateState.targetRackNumber || ''}
+                                    onChange={(e) => setReallocateState({ 
+                                        ...reallocateState, 
+                                        targetRackNumber: parseInt(e.target.value)
+                                    })}
+                                    className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                >
+                                    <option value="">Select Rack</option>
+                                    {(() => {
+                                        const shelf = layouts.find(l => l.id === reallocateState.targetLayoutId)?.shelves.get(reallocateState.targetShelfId);
+                                        if (!shelf) return null;
+                                        return Array.from({ length: shelf.rackCount }).map((_, i) => (
+                                            <option key={i + 1} value={i + 1}>
+                                                {shelf.rackLabels?.[i] || `Rack ${i + 1}`}
+                                            </option>
+                                        ));
+                                    })()}
+                                </select>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                <div className="p-4 border-t border-gray-700 bg-gray-800 flex justify-end gap-3">
+                    <button 
+                        onClick={() => setReallocateState({ ...reallocateState, isOpen: false })}
+                        className="px-4 py-2 rounded-md border border-gray-600 text-gray-300 hover:bg-gray-700 font-medium"
+                    >
+                        Cancel
+                    </button>
+                    <button 
+                        onClick={handleReallocateSubmit}
+                        disabled={!reallocateState.targetRackNumber || !reallocateState.quantity}
+                        className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <ArrowRight size={18} />
+                        Confirm Move
+                    </button>
+                </div>
+            </div>
         </div>
       )}
     </div>
