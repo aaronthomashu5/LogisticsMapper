@@ -141,8 +141,9 @@ const App: React.FC = () => {
         await api.addPendingItems(newItems);
         const updated = await api.getPendingItems();
         setPendingItems(updated);
-    } catch (e) {
-        alert("Failed to add items");
+    } catch (e: any) {
+        console.error("Failed to add items:", e);
+        alert(`Failed to add items: ${e.message || e}`);
     }
   };
 

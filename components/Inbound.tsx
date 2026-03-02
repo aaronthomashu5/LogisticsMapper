@@ -109,7 +109,7 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
         `;
 
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-latest',
+            model: 'gemini-3-flash-preview',
             contents: {
                 parts: [
                     { inlineData: { mimeType: file.type, data: base64Data } },
