@@ -17,6 +17,7 @@ const App: React.FC = () => {
   // Auth State
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [userDivisions, setUserDivisions] = useState<string[]>([]);
   const [authLoading, setAuthLoading] = useState(true);
 
   // Data State
@@ -76,6 +77,15 @@ const App: React.FC = () => {
               // Handle case where profile trigger might have failed or delayed
           } else {
               setProfile(data);
+              
+              // Fetch user divisions
+              try {
+                  const divisions = await api.getUserDivisions(userId);
+                  setUserDivisions(divisions);
+              } catch (e) {
+                  console.error("Error fetching user divisions:", e);
+              }
+
               if (data.is_approved) {
                   loadAllData();
               }
@@ -141,6 +151,18 @@ const App: React.FC = () => {
      setPendingItems(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
   };
 
+  const handleDeletePendingItem = async (id: string) => {
+      console.log("Deleting pending item with ID:", id);
+      try {
+          await api.deletePendingItem(id);
+          const updated = await api.getPendingItems();
+          setPendingItems(updated);
+      } catch (e) {
+          console.error("Delete failed:", e);
+          alert("Failed to delete item");
+      }
+  };
+
   const handleAllocateItem = async (pendingId: string, location: StockItem['location']) => {
     try {
         await api.allocateItem(pendingId, location);
@@ -151,6 +173,29 @@ const App: React.FC = () => {
         setTransactions(t);
     } catch (e) {
         alert("Allocation failed");
+    }
+  };
+
+  // --- Direct Add Logic (from Rack View) ---
+  const handleDirectAdd = async (newItem: PendingItem, location: StockItem['location']) => {
+    try {
+        // 1. Add to pending and get the DB ID
+        const addedItems = await api.addPendingItems([newItem]);
+        const dbItem = addedItems[0];
+
+        if (!dbItem) throw new Error("Failed to create pending item");
+        
+        // 2. Immediately allocate using the DB ID
+        await api.allocateItem(dbItem.id, location);
+        
+        // 3. Refresh data
+        const [i, p, t] = await Promise.all([api.getItems(), api.getPendingItems(), api.getTransactions()]);
+        setItems(i);
+        setPendingItems(p);
+        setTransactions(t);
+    } catch (e) {
+        console.error("Direct add failed:", e);
+        alert("Failed to add item directly to rack.");
     }
   };
 
@@ -178,13 +223,26 @@ const App: React.FC = () => {
     }
   };
 
+  // --- Reallocate Logic ---
+  const handleReallocate = async (itemId: string, quantity: number, newLocation: StockItem['location']) => {
+    try {
+        await api.reallocateItem(itemId, quantity, newLocation);
+        const [i, t] = await Promise.all([api.getItems(), api.getTransactions()]);
+        setItems(i);
+        setTransactions(t);
+    } catch (e: any) {
+        console.error("Reallocate failed:", e);
+        alert(`Reallocation failed: ${e.message || e}`);
+    }
+  };
+
   // --- Access Control ---
   const accessibleLayouts = React.useMemo(() => {
       if (!profile || profile.role === 'admin') return layouts;
       return layouts.filter(l => 
-          !l.divisionIds || l.divisionIds.length === 0 || (profile.divisionId && l.divisionIds.includes(profile.divisionId))
+          !l.divisionIds || l.divisionIds.length === 0 || l.divisionIds.some(id => userDivisions.includes(id))
       );
-  }, [layouts, profile]);
+  }, [layouts, profile, userDivisions]);
 
   const accessibleItems = React.useMemo(() => {
       if (!profile || profile.role === 'admin') return items;
@@ -317,6 +375,8 @@ const App: React.FC = () => {
             layouts={accessibleLayouts} 
             items={accessibleItems} 
             onUnstock={handleUnstock} 
+            onReallocate={handleReallocate}
+            onDirectAdd={handleDirectAdd}
             isAdmin={profile?.role === 'admin'}
             onUpdateLayout={handleSaveLayout}
           />
@@ -327,11 +387,12 @@ const App: React.FC = () => {
               pendingItems={pendingItems} 
               onAddPending={handleAddPendingItems} 
               onUpdatePending={handleUpdatePendingItem}
+              onDeletePending={handleDeletePendingItem}
               onAllocate={handleAllocateItem} 
             />
         )}
         {phase === 'HISTORY' && (
-           <StockHistory transactions={transactions} onRestock={handleRestock} />
+           <StockHistory transactions={transactions} onRestock={handleRestock} layouts={layouts} />
         )}
         {phase === 'ADMIN' && profile?.role === 'admin' && (
             <AdminDashboard />
