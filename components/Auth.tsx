@@ -26,6 +26,9 @@ export const Auth: React.FC = () => {
         const { error } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            emailRedirectTo: window.location.origin,
+          },
         });
         if (error) throw error;
         setMessage({ type: 'success', text: 'Check your email for the confirmation link!' });
@@ -62,7 +65,7 @@ export const Auth: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
       <div className="bg-gray-800 p-8 rounded-lg shadow-xl max-w-md w-full border border-gray-700">
-        <h1 className="text-3xl font-bold text-white mb-6 text-center">Warehouse Mapper Pro</h1>
+        <h1 className="text-3xl font-bold text-white mb-6 text-center">Logistic Mapper</h1>
         <p className="text-gray-400 text-center mb-8">
           {isResetMode ? 'Reset Password' : (isSignUp ? 'Create a new account' : 'Sign in to your account')}
         </p>
