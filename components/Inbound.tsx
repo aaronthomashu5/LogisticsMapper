@@ -1,8 +1,9 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { Upload, FileSpreadsheet, Camera, Loader2, ArrowRight, CheckCircle, Pencil, Save, X, Keyboard, Plus } from 'lucide-react';
+import { Upload, FileSpreadsheet, Camera, Loader2, ArrowRight, CheckCircle, Pencil, Save, X, Keyboard, Plus, ScanLine, BrainCircuit } from 'lucide-react';
 import type { Layout, PendingItem, StockItem, Shelf } from '../types';
+import { GoogleGenAI } from "@google/genai";
 
 declare const Tesseract: any;
 
@@ -11,13 +12,18 @@ interface InboundProps {
   pendingItems: PendingItem[];
   onAddPending: (items: PendingItem[]) => void;
   onUpdatePending: (item: PendingItem) => void;
+  onDeletePending: (id: string) => void;
   onAllocate: (id: string, location: StockItem['location']) => void;
 }
 
-export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPending, onAllocate, onUpdatePending }) => {
+export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPending, onAllocate, onUpdatePending, onDeletePending }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const aiInputRef = useRef<HTMLInputElement>(null);
+
+  // Scan Modal State
+  const [showScanModal, setShowScanModal] = useState(false);
 
   // Manual Entry State
   const [showManualModal, setShowManualModal] = useState(false);
@@ -63,6 +69,95 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
       }
     };
     reader.readAsBinaryString(file);
+  };
+
+  // --- AI Scan Handling with Gemini ---
+  const handleGeminiScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsProcessing(true);
+    setShowScanModal(false);
+
+    try {
+        // Convert to Base64
+        const base64Data = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => {
+                const result = reader.result as string;
+                // Remove data URL prefix (e.g., "data:image/jpeg;base64,")
+                const base64 = result.split(',')[1];
+                resolve(base64);
+            };
+            reader.onerror = error => reject(error);
+        });
+
+        // Initialize Gemini
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        
+        const prompt = `
+        Analyze this delivery order image. Extract all items in a structured JSON format.
+        Return ONLY a JSON array of objects with the following fields:
+        - name (string): Item description or name
+        - quantity (number): The quantity
+        - unit (string): The unit of measure (e.g., PCS, KG, BOX, SET). Default to 'PCS' if unsure.
+        - lotNumber (string, optional): Lot or batch number if visible
+        - specification (string, optional): Any technical specs (e.g., dimensions, material)
+        
+        Do not include markdown formatting like \`\`\`json. Just the raw JSON array.
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-latest',
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: file.type, data: base64Data } },
+                    { text: prompt }
+                ]
+            }
+        });
+
+        const responseText = response.text || '[]';
+        // Clean up markdown if present (just in case)
+        const cleanJson = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+        
+        let parsedData: any[] = [];
+        try {
+            parsedData = JSON.parse(cleanJson);
+        } catch (e) {
+            console.error("Failed to parse Gemini JSON", e);
+            alert("AI could not extract structured data. Please try again or use manual entry.");
+            return;
+        }
+
+        if (!Array.isArray(parsedData)) {
+            parsedData = [parsedData];
+        }
+
+        const newItems: PendingItem[] = parsedData.map((item: any) => ({
+            id: `ai-${Math.random().toString(36).substr(2, 9)}`,
+            name: item.name || 'Unknown Item',
+            quantity: parseFloat(item.quantity) || 0,
+            unit: (item.unit || 'PCS').toUpperCase(),
+            lotNumber: item.lotNumber,
+            specification: item.specification,
+            source: 'AI' as const
+        })).filter((i: PendingItem) => i.quantity > 0);
+
+        if (newItems.length === 0) {
+            alert("No valid items found in the image.");
+        } else {
+            onAddPending(newItems);
+        }
+
+    } catch (error) {
+        console.error("Gemini Scan Error", error);
+        alert("Failed to process image with AI. Check API Key and connection.");
+    } finally {
+        setIsProcessing(false);
+        if (aiInputRef.current) aiInputRef.current.value = '';
+    }
   };
 
   // --- OCR Handling with Tesseract.js ---
@@ -191,18 +286,27 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
           />
         </div>
 
-        {/* OCR Uploader */}
+        {/* Scan DO Card */}
         <div 
-           onClick={() => imageInputRef.current?.click()}
+           onClick={() => setShowScanModal(true)}
            className="border-2 border-dashed border-gray-600 rounded-lg p-6 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-800 hover:border-blue-500 transition-colors group"
         >
-          <Camera className="w-8 h-8 text-blue-500 mb-2 group-hover:scale-110 transition-transform" />
+          <ScanLine className="w-8 h-8 text-blue-500 mb-2 group-hover:scale-110 transition-transform" />
           <h3 className="font-semibold text-base">Scan DO</h3>
-          <p className="text-gray-400 text-xs text-center mt-1">Camera / Image OCR</p>
+          <p className="text-gray-400 text-xs text-center mt-1">OCR & AI Scan</p>
+          
+          {/* Hidden Inputs */}
           <input 
             type="file" 
             ref={imageInputRef} 
             onChange={handleImageUpload} 
+            accept="image/*" 
+            className="hidden" 
+          />
+          <input 
+            type="file" 
+            ref={aiInputRef} 
+            onChange={handleGeminiScan} 
             accept="image/*" 
             className="hidden" 
           />
@@ -223,6 +327,57 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
         <div className="flex items-center justify-center p-8 bg-gray-800 rounded-lg">
             <Loader2 className="animate-spin mr-2 text-blue-500" />
             <span>Processing data...</span>
+        </div>
+      )}
+
+      {/* Scan Method Modal */}
+      {showScanModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700 w-full max-w-md overflow-hidden">
+                <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-800">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                        <ScanLine size={20} className="text-blue-500"/> 
+                        Select Scan Method
+                    </h3>
+                    <button onClick={() => setShowScanModal(false)} className="text-gray-400 hover:text-white">
+                        <X size={20} />
+                    </button>
+                </div>
+                
+                <div className="p-6 space-y-4">
+                    <button 
+                        onClick={() => {
+                            setShowScanModal(false);
+                            imageInputRef.current?.click();
+                        }}
+                        className="w-full flex items-center gap-4 p-4 bg-gray-700 hover:bg-gray-600 rounded-lg border border-gray-600 hover:border-blue-500 transition-all group"
+                    >
+                        <div className="p-3 bg-blue-900/30 rounded-full text-blue-400 group-hover:scale-110 transition-transform">
+                            <Camera size={24} />
+                        </div>
+                        <div className="text-left">
+                            <h4 className="font-bold text-white">Standard OCR</h4>
+                            <p className="text-xs text-gray-400">Best for simple text extraction using Tesseract.js</p>
+                        </div>
+                    </button>
+
+                    <button 
+                        onClick={() => {
+                            setShowScanModal(false);
+                            aiInputRef.current?.click();
+                        }}
+                        className="w-full flex items-center gap-4 p-4 bg-gray-700 hover:bg-gray-600 rounded-lg border border-gray-600 hover:border-purple-500 transition-all group"
+                    >
+                        <div className="p-3 bg-purple-900/30 rounded-full text-purple-400 group-hover:scale-110 transition-transform">
+                            <BrainCircuit size={24} />
+                        </div>
+                        <div className="text-left">
+                            <h4 className="font-bold text-white">AI Smart Scan (Gemini)</h4>
+                            <p className="text-xs text-gray-400">Intelligent extraction of items, quantities & specs</p>
+                        </div>
+                    </button>
+                </div>
+            </div>
         </div>
       )}
 
@@ -355,6 +510,7 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
                     layouts={layouts} 
                     onAllocate={onAllocate}
                     onUpdate={onUpdatePending}
+                    onDelete={onDeletePending}
                 />
             ))}
         </div>
@@ -368,7 +524,8 @@ const AllocationRow: React.FC<{
     layouts: Layout[]; 
     onAllocate: (id: string, loc: StockItem['location']) => void;
     onUpdate: (item: PendingItem) => void;
-}> = ({ item, layouts, onAllocate, onUpdate }) => {
+    onDelete: (id: string) => void;
+}> = ({ item, layouts, onAllocate, onUpdate, onDelete }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
     const [editValues, setEditValues] = useState<PendingItem>(item);
@@ -404,6 +561,11 @@ const AllocationRow: React.FC<{
     const handleCancelEdit = () => {
         setEditValues(item);
         setIsEditing(false);
+    };
+
+    const handleDelete = () => {
+        console.log("Attempting to delete item:", item.id, item.name);
+        onDelete(item.id);
     };
 
     if (isEditing) {
@@ -490,6 +652,7 @@ const AllocationRow: React.FC<{
                     <div className="flex items-center gap-2">
                         <h4 className="font-bold text-white">{item.name}</h4>
                         {item.source === 'OCR' && <span className="text-[10px] bg-purple-900 text-purple-200 px-1 rounded">OCR</span>}
+                        {item.source === 'AI' && <span className="text-[10px] bg-indigo-900 text-indigo-200 px-1 rounded flex items-center gap-1"><BrainCircuit size={10}/> AI</span>}
                         {item.source === 'EXCEL' && <span className="text-[10px] bg-green-900 text-green-200 px-1 rounded">XLS</span>}
                         {item.source === 'MANUAL' && <span className="text-[10px] bg-orange-900 text-orange-200 px-1 rounded">MANUAL</span>}
                         <button 
@@ -506,12 +669,26 @@ const AllocationRow: React.FC<{
                         {item.specification && <span>Spec: <span className="text-yellow-300">{item.specification}</span></span>}
                     </div>
                 </div>
-                <button 
-                    onClick={() => setIsExpanded(!isExpanded)}
-                    className={`px-4 py-2 rounded font-medium text-sm transition-colors ${isExpanded ? 'bg-gray-600' : 'bg-blue-600 hover:bg-blue-700'}`}
-                >
-                    {isExpanded ? 'Cancel' : 'Allocate >'}
-                </button>
+                <div className="flex items-center gap-2">
+                    <button 
+                        type="button"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete();
+                        }}
+                        className="p-2 rounded font-medium text-sm transition-colors bg-gray-700 hover:bg-red-900/50 text-gray-400 hover:text-red-200 border border-gray-600 hover:border-red-800 z-10"
+                        title="Remove item"
+                    >
+                        <X size={18} />
+                    </button>
+                    <button 
+                        type="button"
+                        onClick={() => setIsExpanded(!isExpanded)}
+                        className={`px-4 py-2 rounded font-medium text-sm transition-colors ${isExpanded ? 'bg-gray-600' : 'bg-blue-600 hover:bg-blue-700'}`}
+                    >
+                        {isExpanded ? 'Cancel' : 'Allocate >'}
+                    </button>
+                </div>
             </div>
 
             {isExpanded && (
