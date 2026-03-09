@@ -363,7 +363,7 @@ export const api = {
     if (deleteError) throw new Error(deleteError.message);
   },
 
-  async unstockItem(itemId: string, quantity: number): Promise<void> {
+  async unstockItem(itemId: string, quantity: number, doNumber?: string): Promise<void> {
     const user = (await supabase.auth.getUser()).data.user;
     if (!user) throw new Error("User not authenticated");
 
@@ -376,14 +376,22 @@ export const api = {
 
     if (fetchError || !item) throw new Error("Item not found");
 
-    // 2. Update Stock
+    // 2. Update Stock or Delete if 0
     const newQuantity = Math.max(0, item.quantity - quantity);
-    const { error: updateError } = await supabase
-        .from('stock_items')
-        .update({ quantity: newQuantity })
-        .eq('id', itemId);
-
-    if (updateError) throw new Error(updateError.message);
+    
+    if (newQuantity === 0) {
+        const { error: deleteError } = await supabase
+            .from('stock_items')
+            .delete()
+            .eq('id', itemId);
+        if (deleteError) throw new Error(deleteError.message);
+    } else {
+        const { error: updateError } = await supabase
+            .from('stock_items')
+            .update({ quantity: newQuantity })
+            .eq('id', itemId);
+        if (updateError) throw new Error(updateError.message);
+    }
 
     // 3. Create Transaction
     const { error: txnError } = await supabase
@@ -397,6 +405,7 @@ export const api = {
             layout_id_snapshot: item.layout_id,
             shelf_id_snapshot: item.shelf_id,
             rack_number_snapshot: item.rack_number,
+            do_number: doNumber,
             is_restocked: false
         });
 
@@ -501,7 +510,8 @@ export const api = {
             shelfId: t.new_shelf_id,
             rackNumber: t.new_rack_number
         } : undefined,
-        isRestocked: t.is_restocked
+        isRestocked: t.is_restocked,
+        doNumber: t.do_number
     }));
   },
 

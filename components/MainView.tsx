@@ -1,18 +1,23 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
-import type { Layout, StockItem, Shelf, PendingItem } from '../types';
-import { 
-  Search, X, Package, Warehouse, Layers, MinusCircle, 
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import type { Layout, StockItem, Shelf, PendingItem, Transaction } from '../types';
+import { GoogleGenAI } from "@google/genai";
+import * as XLSX from 'xlsx';
+import {
+  Search, X, Package, Warehouse, Layers, MinusCircle, FileDown,
   Filter, ChevronLeft, ChevronRight, ArrowUpDown, AlertTriangle, MapPin,
-  Home, Grid, List, Pencil, Check, Plus, ArrowRight
+  Home, Grid, List, Pencil, Check, Plus, ArrowRight, ScanLine, Camera, Loader2, BrainCircuit
 } from 'lucide-react';
+
+declare const Tesseract: any;
 
 interface MainViewProps {
   layouts: Layout[];
   items: StockItem[];
-  onUnstock: (itemId: string, amount: number) => void;
+  transactions: Transaction[];
+  onUnstock: (itemId: string, amount: number, doNumber?: string) => void;
   onReallocate: (itemId: string, quantity: number, newLocation: StockItem['location']) => void;
-  onDirectAdd?: (item: PendingItem, location: StockItem['location']) => void;
+  onDirectAdd?: (item: PendingItem | PendingItem[], location: StockItem['location']) => void;
   isAdmin?: boolean;
   onUpdateLayout?: (layout: Layout) => void;
 }
@@ -22,7 +27,7 @@ type SortDirection = 'asc' | 'desc';
 
 const ITEMS_PER_PAGE = 10;
 
-export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, onReallocate, onDirectAdd, isAdmin = false, onUpdateLayout }) => {
+export const MainView: React.FC<MainViewProps> = ({ layouts, items, transactions, onUnstock, onReallocate, onDirectAdd, isAdmin = false, onUpdateLayout }) => {
   // Search & Filter State
   const [query, setQuery] = useState('');
   const [showLowStock, setShowLowStock] = useState(false);
@@ -40,6 +45,11 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
 
   // Add Item State
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showScanModal, setShowScanModal] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const aiInputRef = useRef<HTMLInputElement>(null);
+
   const [addForm, setAddForm] = useState({
     name: '',
     quantity: '',
@@ -55,7 +65,17 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
 
   // Selection State (For Search Result Detail)
   const [selectedItem, setSelectedItem] = useState<StockItem | null>(null);
-  const [unstockAmount, setUnstockAmount] = useState<string>('');
+  const [unstockState, setUnstockState] = useState<{
+      isOpen: boolean;
+      item: StockItem | null;
+      quantity: string;
+      doNumber: string;
+  }>({
+    isOpen: false,
+    item: null,
+    quantity: '',
+    doNumber: ''
+  });
 
   // Reallocate State
   const [reallocateState, setReallocateState] = useState<{
@@ -161,15 +181,38 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
 
   // --- Handlers ---
   const handleUnstockClick = (item: StockItem) => {
-      if (!unstockAmount) return;
-      const qty = parseFloat(unstockAmount);
-      if (isNaN(qty) || qty <= 0) return;
-      if (qty > item.quantity) {
-          alert("Cannot unstock more than available quantity.");
-          return;
-      }
-      onUnstock(item.id, qty);
-      setUnstockAmount('');
+    setUnstockState({
+        isOpen: true,
+        item,
+        quantity: '',
+        doNumber: ''
+    });
+  };
+
+  const submitUnstock = () => {
+    const { item, quantity, doNumber } = unstockState;
+    if (!item || !quantity || !doNumber) {
+        alert("Please fill all fields (Quantity and DO Number)");
+        return;
+    }
+
+    const qty = parseFloat(quantity);
+    if (isNaN(qty) || qty <= 0) {
+        alert("Invalid quantity");
+        return;
+    }
+    if (qty > item.quantity) {
+        alert("Cannot unstock more than available quantity.");
+        return;
+    }
+    
+    onUnstock(item.id, qty, doNumber);
+    setUnstockState({
+        isOpen: false,
+        item: null,
+        quantity: '',
+        doNumber: ''
+    });
   };
 
   const openReallocate = (item: StockItem) => {
@@ -200,6 +243,50 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
       });
       
       setReallocateState({ ...reallocateState, isOpen: false });
+  };
+
+  const handleExport = () => {
+    // If filtering, use filtered list. If empty/default, export ALL items.
+    const itemsToExport = (processedItems.length > 0 || query || showLowStock) ? processedItems : items;
+
+    if (itemsToExport.length === 0) {
+        alert("No items to export.");
+        return;
+    }
+
+    const exportData = itemsToExport.map(item => {
+        // Find transactions for this item
+        const itemTxns = transactions ? transactions.filter(t => t.itemId === item.id).sort((a, b) => a.timestamp - b.timestamp) : [];
+        
+        const firstIn = itemTxns.find(t => t.quantityChanged > 0);
+        const lastOut = [...itemTxns].reverse().find(t => t.quantityChanged < 0 && !t.isRestocked);
+        
+        // Location String
+        const layoutName = layouts.find(l => l.id === item.location.layoutId)?.name || 'Unknown';
+        const shelf = Array.from(layouts.find(l => l.id === item.location.layoutId)?.shelves.values() || [])
+            .find(s => s.id === item.location.shelfId);
+        const rackLabel = shelf?.rackLabels?.[item.location.rackNumber - 1] || `Rack ${item.location.rackNumber}`;
+
+        return {
+            "Item Name": item.name,
+            "Current Quantity": item.quantity,
+            "Unit": item.unit,
+            "Layout": layoutName,
+            "Shelf": shelf?.label || item.location.shelfId,
+            "Rack": rackLabel,
+            "Lot Number": item.lotNumber || '-',
+            "Specification": item.specification || '-',
+            "First In Date": firstIn ? new Date(firstIn.timestamp).toLocaleString() : '-',
+            "Last Out Date": lastOut ? new Date(lastOut.timestamp).toLocaleString() : '-',
+            "Last Out DO #": lastOut?.doNumber || '-',
+            "Last Out Qty": lastOut ? Math.abs(lastOut.quantityChanged) : '-'
+        };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Inventory Report");
+    XLSX.writeFile(wb, `Inventory_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const handleSaveRackLabel = (rackIndex: number) => {
@@ -237,7 +324,125 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
     onUpdateLayout(newLayout);
     setEditingRack(null);
   };
+    // --- Add Material via Scan ---
+    const handleGeminiScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!onDirectAdd || !activeLayout || !activeShelf || !viewPath.rackNumber) return;
+        const file = e.target.files?.[0];
+        if (!file) return;
 
+        setIsProcessing(true);
+        setShowScanModal(false);
+
+        try {
+            const base64Data = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve((reader.result as string).split(',')[1]);
+                reader.onerror = error => reject(error);
+            });
+
+            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+            const prompt = `
+            Analyze this delivery order image. Extract all items in a structured JSON format.
+            Return ONLY a JSON array of objects with fields: name (string), quantity (number), unit (string), lotNumber (string, optional), specification (string, optional).
+            Do not include markdown formatting.
+            `;
+
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: {
+                    parts: [
+                        { inlineData: { mimeType: file.type, data: base64Data } },
+                        { text: prompt }
+                    ]
+                }
+            });
+
+            const cleanJson = (response.text || '[]').replace(/```json/g, '').replace(/```/g, '').trim();
+            let parsedData: any[] = [];
+            try { parsedData = JSON.parse(cleanJson); } catch (e) { throw new Error("Parse failed"); }
+            if (!Array.isArray(parsedData)) parsedData = [parsedData];
+
+            const newItems: PendingItem[] = parsedData.map((item: any) => ({
+                id: `ai-${Math.random().toString(36).substr(2, 9)}`,
+                name: item.name || 'Unknown Item',
+                quantity: parseFloat(item.quantity) || 0,
+                unit: (item.unit || 'PCS').toUpperCase(),
+                lotNumber: item.lotNumber,
+                specification: item.specification,
+                source: 'AI' as const
+            })).filter((i: PendingItem) => i.quantity > 0);
+
+            if (newItems.length > 0) {
+                const location = { layoutId: activeLayout.id, shelfId: activeShelf.id, rackNumber: viewPath.rackNumber };
+                onDirectAdd(newItems, location);
+            } else {
+                alert("No valid items found.");
+            }
+        } catch (error) {
+            console.error("Gemini Scan Error", error);
+            alert("Failed to process image with AI.");
+        } finally {
+            setIsProcessing(false);
+            if (aiInputRef.current) aiInputRef.current.value = '';
+        }
+    };
+
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!onDirectAdd || !activeLayout || !activeShelf || !viewPath.rackNumber) return;
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setIsProcessing(true);
+        setShowScanModal(false);
+
+        try {
+            const worker = await Tesseract.createWorker('eng');
+            const ret = await worker.recognize(file);
+            const text = ret.data.text;
+            await worker.terminate();
+
+            const lines = text.split('\n');
+            const parsedItems: PendingItem[] = [];
+
+            for (const line of lines) {
+                const cleanLine = line.trim();
+                if (cleanLine.length < 5) continue;
+
+                const qtyMatch = cleanLine.match(/(\d+(\.\d+)?)/);
+                const quantity = qtyMatch ? parseFloat(qtyMatch[0]) : 1;
+                const unitMatch = cleanLine.match(/\b(PCS|PK|BOX|CTN|KG|M|ROLL|SET|PAIR|KGM|EA|PACKET|BAG)\b/i);
+                const unit = unitMatch ? unitMatch[0].toUpperCase() : 'PCS';
+                const lotMatch = cleanLine.match(/(?:LOT|BATCH|NO\.)\s*[:#-.]?\s*([A-Z0-9-]+)/i);
+                
+                let name = cleanLine;
+                if (qtyMatch) name = name.replace(qtyMatch[0], '');
+                if (unitMatch) name = name.replace(unitMatch[0], '');
+                if (lotMatch) name = name.replace(lotMatch[0], '');
+                name = name.replace(/[^a-zA-Z0-9\s\-.]/g, ' ').replace(/\s+/g, ' ').trim();
+
+                if (name.length > 2) {
+                    parsedItems.push({
+                        id: `ocr-${Math.random().toString(36).substr(2, 9)}`,
+                        name, quantity, unit, lotNumber: lotMatch ? lotMatch[1] : undefined, source: 'OCR'
+                    });
+                }
+            }
+
+            if (parsedItems.length > 0) {
+                const location = { layoutId: activeLayout.id, shelfId: activeShelf.id, rackNumber: viewPath.rackNumber };
+                onDirectAdd(parsedItems, location);
+            } else {
+                alert("No recognizable text found.");
+            }
+        } catch (error) {
+            console.error("OCR Error", error);
+            alert("Failed to process image with Tesseract.js.");
+        } finally {
+            setIsProcessing(false);
+            if (imageInputRef.current) imageInputRef.current.value = '';
+        }
+    };
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!addForm.name || !addForm.quantity || !onDirectAdd || !activeLayout || !activeShelf || !viewPath.rackNumber) return;
@@ -332,15 +537,25 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
             <h1 className="text-2xl font-bold flex items-center gap-2">
                 <Search className="text-blue-400" /> Stock Locator
             </h1>
-            <button 
-                onClick={() => setShowLowStock(!showLowStock)}
-                className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                    showLowStock ? 'bg-orange-900/50 text-orange-200 border border-orange-700' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                }`}
-            >
-                <AlertTriangle size={16} />
-                Low Stock
-            </button>
+            <div className="flex gap-2">
+                <button 
+                    onClick={handleExport}
+                    className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors bg-green-900/50 text-green-200 border border-green-700 hover:bg-green-800"
+                    title="Export filtered stock to Excel"
+                >
+                    <FileDown size={16} />
+                    Export
+                </button>
+                <button 
+                    onClick={() => setShowLowStock(!showLowStock)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                        showLowStock ? 'bg-orange-900/50 text-orange-200 border border-orange-700' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    }`}
+                >
+                    <AlertTriangle size={16} />
+                    Low Stock
+                </button>
+            </div>
         </div>
         
         <div className="relative">
@@ -380,7 +595,9 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
                     </thead>
                     <tbody className="divide-y divide-gray-700">
                         {paginatedItems.map(item => {
-                            const lName = layouts.find(l => l.id === item.location.layoutId)?.name;
+                            const matchedLayout = layouts.find(l => l.id === item.location.layoutId);
+                            const lName = matchedLayout?.name;
+                            const shelfLabel = Array.from(matchedLayout?.shelves.values() || []).find(s => s.id === item.location.shelfId)?.label || item.location.shelfId;
                             return (
                                 <tr key={item.id} className="hover:bg-gray-750">
                                     <td className="p-4">
@@ -388,7 +605,7 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
                                         <div className="text-xs text-gray-500">Lot: {item.lotNumber || '-'}</div>
                                     </td>
                                     <td className="p-4 text-sm text-gray-400">
-                                        {lName} / {item.location.shelfId} / R{item.location.rackNumber}
+                                        {lName} / {shelfLabel} / R{item.location.rackNumber}
                                     </td>
                                     <td className="p-4 text-right font-mono text-green-400">
                                         {item.quantity} <span className="text-xs text-gray-500">{item.unit}</span>
@@ -575,14 +792,32 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
             {/* LEVEL 4: RACK ITEMS */}
             {viewPath.layoutId && viewPath.shelfId && viewPath.rackNumber && (
                 <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
-                    <div className="p-6 border-b border-gray-700 bg-gray-800">
-                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                            <Package size={24} className="text-blue-400"/>
-                            Items on {activeShelf?.rackLabels?.[viewPath.rackNumber - 1] || `Rack ${viewPath.rackNumber}`}
-                        </h2>
-                        <p className="text-sm text-gray-400 mt-1">
-                            Located in {activeLayout?.name} &gt; Shelf {activeShelf?.label}
-                        </p>
+                    <div className="p-6 border-b border-gray-700 bg-gray-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                        <div>
+                            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                                <Package size={24} className="text-blue-400"/>
+                                Items on {activeShelf?.rackLabels?.[viewPath.rackNumber - 1] || `Rack ${viewPath.rackNumber}`}
+                            </h2>
+                            <p className="text-sm text-gray-400 mt-1">
+                                Located in {activeLayout?.name} &gt; Shelf {activeShelf?.label}
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => setShowScanModal(true)}
+                                className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-md font-medium inline-flex items-center gap-2 transition-colors border border-gray-600 hover:border-blue-500"
+                            >
+                                <ScanLine size={18} className="text-blue-400"/>
+                                Scan DO
+                            </button>
+                            <button
+                                onClick={() => setShowAddModal(true)}
+                                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md font-medium inline-flex items-center gap-2 transition-colors"
+                            >
+                                <Plus size={18} />
+                                Add Material
+                            </button>
+                        </div>
                     </div>
                     
                     <div className="divide-y divide-gray-700">
@@ -590,13 +825,22 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
                             <div className="p-12 text-center text-gray-500">
                                 <Package size={48} className="mx-auto mb-4 opacity-20"/>
                                 <p className="mb-4">This rack is empty.</p>
-                                <button 
-                                    onClick={() => setShowAddModal(true)}
-                                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md font-medium inline-flex items-center gap-2 transition-colors"
-                                >
-                                    <Plus size={18} />
-                                    Add Material
-                                </button>
+                                <div className="flex justify-center gap-3">
+                                    <button
+                                        onClick={() => setShowScanModal(true)}
+                                        className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-md font-medium inline-flex items-center gap-2 transition-colors border border-gray-600 hover:border-blue-500"
+                                    >
+                                        <ScanLine size={18} className="text-blue-400"/>
+                                        Scan DO
+                                    </button>
+                                    <button
+                                        onClick={() => setShowAddModal(true)}
+                                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md font-medium inline-flex items-center gap-2 transition-colors"
+                                    >
+                                        <Plus size={18} />
+                                        Add Material
+                                    </button>
+                                </div>
                             </div>
                         ) : (
                             rackItems.map(item => (
@@ -618,12 +862,6 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
                                         </div>
                                         
                                         <div className="flex items-center gap-2">
-                                            <input 
-                                                type="number" 
-                                                placeholder="Qty"
-                                                className="w-20 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none"
-                                                onChange={(e) => setUnstockAmount(e.target.value)}
-                                            />
                                             <button 
                                                 onClick={() => handleUnstockClick(item)}
                                                 className="bg-red-900/50 hover:bg-red-600 text-red-200 hover:text-white px-3 py-1 rounded text-sm font-medium border border-red-800 hover:border-red-500 transition-colors"
@@ -754,7 +992,125 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
         </div>
       )}
 
+      {/* Scan Method Modal */}
+      {showScanModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700 w-full max-w-md overflow-hidden">
+                <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-800">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                        <ScanLine size={20} className="text-blue-500"/>
+                        Select Scan Method for Rack {viewPath.rackNumber}
+                    </h3>
+                    <button onClick={() => setShowScanModal(false)} className="text-gray-400 hover:text-white">
+                        <X size={20} />
+                    </button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                    <button
+                        onClick={() => {
+                            setShowScanModal(false);
+                            imageInputRef.current?.click();
+                        }}
+                        className="w-full flex items-center gap-4 p-4 bg-gray-700 hover:bg-gray-600 rounded-lg border border-gray-600 hover:border-blue-500 transition-all group"
+                    >
+                        <div className="p-3 bg-blue-900/30 rounded-full text-blue-400 group-hover:scale-110 transition-transform">
+                            <Camera size={24} />
+                        </div>
+                        <div className="text-left">
+                            <h4 className="font-bold text-white">Standard OCR</h4>
+                            <p className="text-xs text-gray-400">Best for simple text extraction using Tesseract.js</p>
+                        </div>
+                    </button>
+
+                    <button
+                        onClick={() => {
+                            setShowScanModal(false);
+                            aiInputRef.current?.click();
+                        }}
+                        className="w-full flex items-center gap-4 p-4 bg-gray-700 hover:bg-gray-600 rounded-lg border border-gray-600 hover:border-purple-500 transition-all group"
+                    >
+                        <div className="p-3 bg-purple-900/30 rounded-full text-purple-400 group-hover:scale-110 transition-transform">
+                            <BrainCircuit size={24} />
+                        </div>
+                        <div className="text-left">
+                            <h4 className="font-bold text-white">AI Smart Scan (Gemini)</h4>
+                            <p className="text-xs text-gray-400">Intelligent extraction of items, quantities & specs</p>
+                        </div>
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {isProcessing && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="flex flex-col items-center p-8 bg-gray-800 rounded-lg shadow-2xl border border-gray-700">
+                <Loader2 className="animate-spin text-blue-500 w-12 h-12 mb-4" />
+                <span className="text-white font-medium">Processing item scan...</span>
+            </div>
+        </div>
+      )}
+
+      <input type="file" ref={imageInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
+      <input type="file" ref={aiInputRef} onChange={handleGeminiScan} accept="image/*" className="hidden" />
+
+      {/* Unstock Modal */}
+      {unstockState.isOpen && unstockState.item && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700 w-full max-w-md overflow-hidden">
+                <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-800">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                        <MinusCircle size={20} className="text-red-500"/>
+                        Unstock Item
+                    </h3>
+                    <button onClick={() => setUnstockState(prev => ({ ...prev, isOpen: false }))} className="text-gray-400 hover:text-white">
+                        <X size={20} />
+                    </button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                    <div className="bg-gray-700/50 p-3 rounded border border-gray-600">
+                         <h4 className="font-bold text-white">{unstockState.item.name}</h4>
+                         <div className="text-sm text-gray-400">Available: {unstockState.item.quantity} {unstockState.item.unit}</div>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Quantity <span className="text-red-500">*</span></label>
+                        <input
+                            type="number"
+                            placeholder="Qty to remove"
+                            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:ring-1 focus:ring-red-500 outline-none"
+                            value={unstockState.quantity}
+                            onChange={(e) => setUnstockState(prev => ({ ...prev, quantity: e.target.value }))}
+                        />
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Delivery Order Number <span className="text-red-500">*</span></label>
+                        <input
+                            type="text"
+                            placeholder="DO Number"
+                            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:ring-1 focus:ring-red-500 outline-none"
+                            value={unstockState.doNumber}
+                            onChange={(e) => setUnstockState(prev => ({ ...prev, doNumber: e.target.value }))}
+                        />
+                    </div>
+
+                    <button
+                        onClick={submitUnstock}
+                        className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors flex items-center justify-center gap-2"
+                    >
+                        <MinusCircle size={18} />
+                        Confirm Unstock
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
       {/* Reallocate Modal */}
+
       {reallocateState.isOpen && reallocateState.item && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
             <div className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -775,7 +1131,9 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
                             <div>
                                 <h4 className="font-bold text-white text-lg">{reallocateState.item.name}</h4>
                                 <div className="text-sm text-gray-400">
-                                    Current: {layouts.find(l => l.id === reallocateState.item?.location.layoutId)?.name} &gt; Shelf {reallocateState.item.location.shelfId} &gt; Rack {reallocateState.item.location.rackNumber}
+                                    Current: {layouts.find(l => l.id === reallocateState.item?.location.layoutId)?.name} &gt; Shelf {
+                                        Array.from(layouts.find(l => l.id === reallocateState.item?.location.layoutId)?.shelves.values() || []).find(s => s.id === reallocateState.item?.location.shelfId)?.label || reallocateState.item?.location.shelfId
+                                    } &gt; Rack {reallocateState.item?.location.rackNumber}
                                 </div>
                             </div>
                             <div className="text-right">
@@ -839,7 +1197,7 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
                                 </div>
                                 {reallocateState.targetShelfId && (
                                     <div className="mt-1 text-sm text-blue-400 font-bold">
-                                        Selected: Shelf {layouts.find(l => l.id === reallocateState.targetLayoutId)?.shelves.get(reallocateState.targetShelfId)?.label}
+                                        Selected: Shelf {Array.from(layouts.find(l => l.id === reallocateState.targetLayoutId)?.shelves.values() || []).find(s => s.id === reallocateState.targetShelfId)?.label}
                                     </div>
                                 )}
                             </div>
@@ -859,9 +1217,9 @@ export const MainView: React.FC<MainViewProps> = ({ layouts, items, onUnstock, o
                                 >
                                     <option value="">Select Rack</option>
                                     {(() => {
-                                        const shelf = layouts.find(l => l.id === reallocateState.targetLayoutId)?.shelves.get(reallocateState.targetShelfId);
+                                        const shelf = Array.from(layouts.find(l => l.id === reallocateState.targetLayoutId)?.shelves.values() || []).find(s => s.id === reallocateState.targetShelfId);
                                         if (!shelf) return null;
-                                        return Array.from({ length: shelf.rackCount }).map((_, i) => (
+                                        return Array.from({ length: Number(shelf.rackCount) || 0 }).map((_, i) => (
                                             <option key={i + 1} value={i + 1}>
                                                 {shelf.rackLabels?.[i] || `Rack ${i + 1}`}
                                             </option>
@@ -913,7 +1271,7 @@ const LayoutViewer: React.FC<LayoutViewerProps> = ({ layout, highlightedShelfId,
                         {Array.from({ length: layout.cols }).map((_, c) => {
                             const cellId = `${r}-${c}`;
                             const shelf = layout.shelves.get(cellId);
-                            const isHighlighted = cellId === highlightedShelfId;
+                            const isHighlighted = shelf?.id === highlightedShelfId;
 
                             return (
                                 <div

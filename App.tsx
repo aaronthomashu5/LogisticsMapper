@@ -178,17 +178,20 @@ const App: React.FC = () => {
   };
 
   // --- Direct Add Logic (from Rack View) ---
-  const handleDirectAdd = async (newItem: PendingItem, location: StockItem['location']) => {
+  const handleDirectAdd = async (newItems: PendingItem | PendingItem[], location: StockItem['location']) => {
     try {
+        const itemsToAdd = Array.isArray(newItems) ? newItems : [newItems];
+        
         // 1. Add to pending and get the DB ID
-        const addedItems = await api.addPendingItems([newItem]);
-        const dbItem = addedItems[0];
+        const addedItems = await api.addPendingItems(itemsToAdd);
 
-        if (!dbItem) throw new Error("Failed to create pending item");
-        
+        if (addedItems.length === 0) throw new Error("Failed to create pending item");
+
         // 2. Immediately allocate using the DB ID
-        await api.allocateItem(dbItem.id, location);
-        
+        for (const dbItem of addedItems) {
+            await api.allocateItem(dbItem.id, location);
+        }
+
         // 3. Refresh data
         const [i, p, t] = await Promise.all([api.getItems(), api.getPendingItems(), api.getTransactions()]);
         setItems(i);
@@ -201,20 +204,21 @@ const App: React.FC = () => {
   };
 
   // --- Unstock Logic ---
-  const handleUnstock = async (itemId: string, qtyToRemove: number) => {
-    try {
-        await api.unstockItem(itemId, qtyToRemove);
-        const [i, t] = await Promise.all([api.getItems(), api.getTransactions()]);
-        setItems(i);
-        setTransactions(t);
-    } catch (e) {
-        alert("Unstock failed");
-    }
-  };
+    const handleUnstock = async (itemId: string, qtyToRemove: number, doNumber?: string) => {
+      try {
+          await api.unstockItem(itemId, qtyToRemove, doNumber);
+          const [i, t] = await Promise.all([api.getItems(), api.getTransactions()]);
+          setItems(i);
+          setTransactions(t);
+      } catch (e: any) {
+          console.error("Unstock Error:", e);
+          alert("Unstock failed: " + (e.message || "Unknown Error"));
+      }
+    };
 
-  // --- Restock Logic ---
-  const handleRestock = async (transactionId: string) => {
-    try {
+    // --- Restock Logic ---
+    const handleRestock = async (transactionId: string) => {
+      try {
         await api.restockTransaction(transactionId);
         const [i, t] = await Promise.all([api.getItems(), api.getTransactions()]);
         setItems(i);
@@ -374,8 +378,9 @@ const App: React.FC = () => {
         {phase === 'SEARCH' && (
           <MainView 
             layouts={accessibleLayouts} 
-            items={accessibleItems} 
-            onUnstock={handleUnstock} 
+            items={accessibleItems}
+            transactions={transactions}
+            onUnstock={handleUnstock}
             onReallocate={handleReallocate}
             onDirectAdd={handleDirectAdd}
             isAdmin={profile?.role === 'admin'}

@@ -1,7 +1,8 @@
 
 import React, { useState, useMemo } from 'react';
 import type { Transaction, Layout } from '../types';
-import { History, RefreshCw, MapPin, Filter, Search, Calendar, ArrowUpDown, X, ArrowRight } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { History, RefreshCw, MapPin, Filter, Search, Calendar, ArrowUpDown, X, ArrowRight, FileDown } from 'lucide-react';
 
 interface StockHistoryProps {
   transactions: Transaction[];
@@ -53,7 +54,10 @@ export const StockHistory: React.FC<StockHistoryProps> = ({ transactions, onRest
       }
 
       // Item Filter
-      if (itemSearch && !txn.itemName.toLowerCase().includes(itemSearch.toLowerCase())) return false;
+      if (itemSearch && 
+            !txn.itemName.toLowerCase().includes(itemSearch.toLowerCase()) && 
+            !(txn.doNumber && txn.doNumber.toLowerCase().includes(itemSearch.toLowerCase()))
+      ) return false;
 
       // Layout/Division Filter
       if (selectedLayoutId && txn.originalLocation?.layoutId !== selectedLayoutId) return false;
@@ -91,6 +95,30 @@ export const StockHistory: React.FC<StockHistoryProps> = ({ transactions, onRest
 
   const hasActiveFilters = itemSearch || locationSearch || selectedLayoutId || startDate || endDate || sortOption !== 'date_desc';
 
+  const handleExportHistory = () => {
+      if (!startDate && !endDate) {
+          alert("Please set a Start Date or End Date filter first to avoid large data export.");
+          setShowFilters(true);
+          return;
+      }
+
+      const data = filteredTransactions.map(txn => ({
+          "Date": new Date(txn.timestamp).toLocaleString(),
+          "Item Name": txn.itemName,
+          "Quantity": Math.abs(txn.quantityChanged),
+          "Type": txn.newLocation ? 'MOVE' : (txn.quantityChanged > 0 ? 'IN' : 'OUT'),
+          "DO Number": txn.doNumber || '-',
+          "From Location": getLocationString(txn.originalLocation),
+          "To Location": txn.newLocation ? getLocationString(txn.newLocation) : '-',
+          "Restocked": txn.isRestocked ? 'Yes' : 'No'
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "History");
+      XLSX.writeFile(wb, `History_Export_${startDate || 'start'}_to_${endDate || 'now'}.xlsx`);
+  };
+
   return (
     <div className="space-y-6">
        <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
@@ -102,29 +130,39 @@ export const StockHistory: React.FC<StockHistoryProps> = ({ transactions, onRest
                 </h1>
                 <p className="text-gray-400 text-sm">Log of stock movements. Tracks origin location for unstocked items.</p>
             </div>
-            <button 
-                onClick={() => setShowFilters(!showFilters)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors ${showFilters ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
-            >
-                <Filter size={18} />
-                Filters & Sort
-                {hasActiveFilters && <span className="w-2 h-2 bg-red-500 rounded-full ml-1"></span>}
-            </button>
+            <div className="flex gap-2">
+                <button 
+                  onClick={handleExportHistory}
+                  className="flex items-center gap-2 px-3 py-2 rounded-md font-medium transition-colors bg-green-900/50 text-green-200 border border-green-700 hover:bg-green-800"
+                  title="Export filtered history to Excel (Requires date range)"
+                >
+                    <FileDown size={18} />
+                    Export
+                </button>
+                <button 
+                    onClick={() => setShowFilters(!showFilters)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors ${showFilters ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+                >
+                    <Filter size={18} />
+                    Filters & Sort
+                    {hasActiveFilters && <span className="w-2 h-2 bg-red-500 rounded-full ml-1"></span>}
+                </button>
+            </div>
           </div>
 
           {showFilters && (
               <div className="bg-gray-900/50 p-4 rounded-md border border-gray-700 space-y-4 animate-in fade-in slide-in-from-top-2">
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {/* Item Search */}
+                      {/* Item/DO Search */}
                       <div>
-                          <label className="block text-xs text-gray-400 mb-1">Item Name</label>
+                          <label className="block text-xs text-gray-400 mb-1">Item Name or DO #</label>
                           <div className="relative">
                               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                               <input 
                                   type="text" 
                                   value={itemSearch}
                                   onChange={(e) => setItemSearch(e.target.value)}
-                                  placeholder="Search items..."
+                                  placeholder="Search items or DO#..."
                                   className="w-full bg-gray-800 border border-gray-600 rounded px-3 pl-9 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
                               />
                           </div>
@@ -237,6 +275,12 @@ export const StockHistory: React.FC<StockHistoryProps> = ({ transactions, onRest
                             <span>{new Date(txn.timestamp).toLocaleString()}</span>
                             <span className="hidden sm:inline">•</span>
                             <span className="font-mono text-gray-300">Qty: {Math.abs(txn.quantityChanged)}</span>
+                            {txn.doNumber && (
+                                <>
+                                    <span className="hidden sm:inline">•</span>
+                                    <span className="text-yellow-400 font-mono">DO: {txn.doNumber}</span>
+                                </>
+                            )}
                             
                             {txn.newLocation ? (
                                 <>

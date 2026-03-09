@@ -68,6 +68,7 @@ export interface Transaction {
     rackNumber: number;
   };
   isRestocked: boolean;
+  doNumber?: string;
 }
 
 export type AppPhase = 'SETUP' | 'SEARCH' | 'INBOUND' | 'HISTORY';

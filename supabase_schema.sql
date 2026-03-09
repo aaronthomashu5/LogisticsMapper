@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     layout_id_snapshot UUID,
     shelf_id_snapshot UUID,
     rack_number_snapshot INTEGER,
-
+    do_number TEXT,
     is_restocked BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

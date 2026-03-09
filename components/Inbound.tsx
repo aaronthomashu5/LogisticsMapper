@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { Upload, FileSpreadsheet, Camera, Loader2, ArrowRight, CheckCircle, Pencil, Save, X, Keyboard, Plus, ScanLine, BrainCircuit } from 'lucide-react';
 import type { Layout, PendingItem, StockItem, Shelf } from '../types';
@@ -539,10 +539,41 @@ const AllocationRow: React.FC<{
     }, [item]);
     
     // Helper to find racks based on typing
-    const suggestions = layouts.find(l => l.id === selectedLayoutId)?.shelves;
-    const filteredShelves: Shelf[] = suggestions 
-        ? (Array.from(suggestions.values()) as Shelf[]).filter((s: Shelf) => s.label.toLowerCase().includes(searchTerm.toLowerCase()))
-        : [];
+    const activeLayout = layouts.find(l => l.id === selectedLayoutId);
+    const allShelves = activeLayout ? Array.from(activeLayout.shelves.values()) : [];
+    
+    const matchingLocations = useMemo(() => {
+        if (!searchTerm) {
+            // If no search term, return nothing to avoid clutter or return all (maybe too many)
+            // Let's return empty and ask user to type, or maybe top 10?
+            // The existing code showed all shelves if search term was empty (because includes('') is true)
+            // But it showed ALL racks for ALL shelves. That might be too much.
+            // Let's replicate "show all" behavior but flattened if that was the case, 
+            // or just show empty state 'Start typing...'?
+            // The previous code: filteredShelves = all.filter(s => s.label.includes('')) -> ALL shelves.
+            // And it rendered ALL racks.
+            // Let's stick to "filter" logic.
+            return []; 
+        }
+
+        const term = searchTerm.toLowerCase();
+        const matches: { shelf: Shelf; rackIndex: number; rackLabel: string }[] = [];
+
+        for (const shelf of allShelves) {
+            for (let i = 0; i < shelf.rackCount; i++) {
+                const rackLabel = shelf.rackLabels?.[i] || `Rack ${i + 1}`;
+                // Match Shelf Label OR Rack Label
+                if (shelf.label.toLowerCase().includes(term) || rackLabel.toLowerCase().includes(term)) {
+                    matches.push({
+                        shelf,
+                        rackIndex: i,
+                        rackLabel
+                    });
+                }
+            }
+        }
+        return matches;
+    }, [allShelves, searchTerm]);
 
     const handleConfirmAllocation = (shelfId: string, rackNum: number) => {
         onAllocate(item.id, {
@@ -707,35 +738,35 @@ const AllocationRow: React.FC<{
                         )}
 
                         {/* Shelf Search */}
-                        <div>
-                             <input 
+                        <div className="relative">
+                            <input 
                                 type="text" 
-                                placeholder="Type Shelf Label (e.g. A-01)..."
+                                placeholder="Type Shelf or Rack Name..."
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
                                 className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm focus:ring-1 focus:ring-blue-500 outline-none"
-                             />
+                            />
+                            {!searchTerm && matchingLocations.length === 0 && (
+                                <p className="text-xs text-gray-500 mt-1">Start typing to find location...</p>
+                            )}
                         </div>
 
                         {/* Suggestions Grid */}
-                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-40 overflow-y-auto custom-scrollbar">
-                            {filteredShelves.map(shelf => (
-                                Array.from({length: shelf.rackCount}).map((_, i) => {
-                                    const rackLabel = shelf.rackLabels?.[i] || `Rack ${i + 1}`;
-                                    return (
-                                        <button 
-                                            key={`${shelf.id}-${i}`}
-                                            onClick={() => handleConfirmAllocation(shelf.id, i + 1)}
-                                            className="text-xs bg-gray-800 hover:bg-green-700 border border-gray-600 hover:border-green-500 rounded p-2 text-left group"
-                                        >
-                                            <div className="font-bold text-gray-300 group-hover:text-white">{shelf.label}</div>
-                                            <div className="text-gray-500 group-hover:text-green-200">{rackLabel}</div>
-                                        </button>
-                                    );
-                                })
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-56 overflow-y-auto custom-scrollbar">
+                            {matchingLocations.map(({ shelf, rackIndex, rackLabel }) => (
+                                <button
+                                    key={`${shelf.id}-${rackIndex}`}
+                                    onClick={() => handleConfirmAllocation(shelf.id, rackIndex + 1)}
+                                    className="p-3 rounded-lg border border-gray-700 bg-gray-800 hover:bg-gray-700 hover:border-blue-500 transition-all text-left flex flex-col gap-1"
+                                >
+                                    <div className="font-bold text-sm text-white">{shelf.label}</div>
+                                    <div className="text-xs text-blue-400 font-mono">{rackLabel}</div>
+                                </button>
                             ))}
-                            {filteredShelves.length === 0 && (
-                                <div className="col-span-full text-center text-xs text-gray-500 py-2">No matching shelves found.</div>
+                            {searchTerm && matchingLocations.length === 0 && (
+                                <div className="col-span-full p-4 text-center text-gray-500 text-sm italic border border-dashed border-gray-700 rounded">
+                                    No matching locations found for "{searchTerm}"
+                                </div>
                             )}
                         </div>
                     </div>
