@@ -21,6 +21,10 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const aiInputRef = useRef<HTMLInputElement>(null);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
+  // Bulk selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Scan Modal State
   const [showScanModal, setShowScanModal] = useState(false);
@@ -266,6 +270,39 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
     // Show a small toast or visual feedback could be added here
   };
 
+  // --- Bulk Selection Logic ---
+  const allSelected = pendingItems.length > 0 && selectedIds.size === pendingItems.length;
+  const someSelected = selectedIds.size > 0 && selectedIds.size < pendingItems.length;
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someSelected;
+    }
+  }, [someSelected]);
+
+  const handleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(pendingItems.map(i => i.id)));
+    }
+  };
+
+  const handleToggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleClearSelected = () => {
+    const ids = Array.from(selectedIds);
+    setSelectedIds(new Set());
+    ids.forEach(id => onDeletePending(id));
+  };
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -490,11 +527,36 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
       {/* To Be Allocated List */}
       <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
         <div className="p-4 border-b border-gray-700">
-            <h2 className="text-xl font-bold flex items-center gap-2">
-                <span className="bg-blue-600 text-xs px-2 py-1 rounded-full text-white">{pendingItems.length}</span>
-                To Be Allocated
-            </h2>
-            <p className="text-sm text-gray-400">Assign these received items to a shelf rack. Verify OCR accuracy.</p>
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                    <input
+                        type="checkbox"
+                        ref={selectAllRef}
+                        checked={allSelected}
+                        onChange={handleSelectAll}
+                        disabled={pendingItems.length === 0}
+                        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500 cursor-pointer flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Select all"
+                    />
+                    <h2 className="text-xl font-bold flex items-center gap-2">
+                        <span className="bg-blue-600 text-xs px-2 py-1 rounded-full text-white">{pendingItems.length}</span>
+                        To Be Allocated
+                    </h2>
+                </div>
+                <button
+                    type="button"
+                    onClick={handleClearSelected}
+                    disabled={selectedIds.size === 0}
+                    className={`px-3 py-1.5 rounded text-sm font-medium text-white transition-colors ${
+                        selectedIds.size > 0
+                            ? 'bg-red-600 hover:bg-red-700'
+                            : 'bg-red-600 opacity-50 cursor-not-allowed'
+                    }`}
+                >
+                    {selectedIds.size > 0 ? `Clear (${selectedIds.size})` : 'Clear'}
+                </button>
+            </div>
+            <p className="text-sm text-gray-400 mt-1">Assign these received items to a shelf rack. Verify OCR accuracy.</p>
         </div>
         
         <div className="divide-y divide-gray-700 max-h-[600px] overflow-y-auto">
@@ -511,6 +573,8 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
                     onAllocate={onAllocate}
                     onUpdate={onUpdatePending}
                     onDelete={onDeletePending}
+                    isSelected={selectedIds.has(item.id)}
+                    onToggleSelect={() => handleToggleSelect(item.id)}
                 />
             ))}
         </div>
@@ -525,7 +589,9 @@ const AllocationRow: React.FC<{
     onAllocate: (id: string, loc: StockItem['location']) => void;
     onUpdate: (item: PendingItem) => void;
     onDelete: (id: string) => void;
-}> = ({ item, layouts, onAllocate, onUpdate, onDelete }) => {
+    isSelected: boolean;
+    onToggleSelect: () => void;
+}> = ({ item, layouts, onAllocate, onUpdate, onDelete, isSelected, onToggleSelect }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
     const [editValues, setEditValues] = useState<PendingItem>(item);
@@ -679,25 +745,34 @@ const AllocationRow: React.FC<{
     return (
         <div className="p-4 hover:bg-gray-750 transition-colors">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="flex-1 group">
-                    <div className="flex items-center gap-2">
-                        <h4 className="font-bold text-white">{item.name}</h4>
-                        {item.source === 'OCR' && <span className="text-[10px] bg-purple-900 text-purple-200 px-1 rounded">OCR</span>}
-                        {item.source === 'AI' && <span className="text-[10px] bg-indigo-900 text-indigo-200 px-1 rounded flex items-center gap-1"><BrainCircuit size={10}/> AI</span>}
-                        {item.source === 'EXCEL' && <span className="text-[10px] bg-green-900 text-green-200 px-1 rounded">XLS</span>}
-                        {item.source === 'MANUAL' && <span className="text-[10px] bg-orange-900 text-orange-200 px-1 rounded">MANUAL</span>}
-                        <button 
-                            onClick={() => setIsEditing(true)}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-gray-600 rounded text-gray-400 hover:text-white"
-                            title="Edit details"
-                        >
-                            <Pencil size={14} />
-                        </button>
-                    </div>
-                    <div className="text-sm text-gray-400 mt-1 flex flex-wrap gap-4">
-                        <span>Qty: <span className="text-white">{item.quantity} {item.unit}</span></span>
-                        {item.lotNumber && <span>Lot: <span className="text-blue-300">{item.lotNumber}</span></span>}
-                        {item.specification && <span>Spec: <span className="text-yellow-300">{item.specification}</span></span>}
+                <div className="flex items-center gap-3 flex-1">
+                    <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => onToggleSelect()}
+                        disabled={isEditing}
+                        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500 cursor-pointer flex-shrink-0"
+                    />
+                    <div className="flex-1 group">
+                        <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-white">{item.name}</h4>
+                            {item.source === 'OCR' && <span className="text-[10px] bg-purple-900 text-purple-200 px-1 rounded">OCR</span>}
+                            {item.source === 'AI' && <span className="text-[10px] bg-indigo-900 text-indigo-200 px-1 rounded flex items-center gap-1"><BrainCircuit size={10}/> AI</span>}
+                            {item.source === 'EXCEL' && <span className="text-[10px] bg-green-900 text-green-200 px-1 rounded">XLS</span>}
+                            {item.source === 'MANUAL' && <span className="text-[10px] bg-orange-900 text-orange-200 px-1 rounded">MANUAL</span>}
+                            <button 
+                                onClick={() => setIsEditing(true)}
+                                className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-gray-600 rounded text-gray-400 hover:text-white"
+                                title="Edit details"
+                            >
+                                <Pencil size={14} />
+                            </button>
+                        </div>
+                        <div className="text-sm text-gray-400 mt-1 flex flex-wrap gap-4">
+                            <span>Qty: <span className="text-white">{item.quantity} {item.unit}</span></span>
+                            {item.lotNumber && <span>Lot: <span className="text-blue-300">{item.lotNumber}</span></span>}
+                            {item.specification && <span>Spec: <span className="text-yellow-300">{item.specification}</span></span>}
+                        </div>
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
