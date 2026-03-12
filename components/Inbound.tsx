@@ -54,16 +54,53 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws);
 
-        // Map excel columns to our structure
-        const parsedItems: PendingItem[] = data.map((row: any) => ({
-          id: `pending-${Math.random().toString(36).substr(2, 9)}`,
-          name: row['STOCK DESCRIPTION'] || 'Unknown Item',
-          quantity: parseFloat(row['QTY']) || 0,
-          unit: row['UNIT'] || 'PCS',
-          source: 'EXCEL' as const
-        })).filter((i: PendingItem) => i.quantity > 0); // Only import items with qty
+        // Fixed/known columns that are NOT specification columns
+        const FIXED_COLUMNS = new Set(['Product', 'Code', 'UNIT', 'Lot']);
 
-        onAddPending(parsedItems);
+        const parsedItems: PendingItem[] = [];
+
+        for (const row of data as any[]) {
+          const productName = (row['Product'] || '').toString().trim();
+          if (!productName) continue; // Skip rows with no product name
+
+          const code = (row['Code'] || '').toString().trim();
+          // Combine product name and code as: "<Product> Stock Code <Code>"
+          const itemName = code
+            ? `${productName} Stock Code ${code}`
+            : productName;
+
+          const unit = (row['UNIT'] || 'PCS').toString().trim();
+          const lotNumber = row['Lot'] ? row['Lot'].toString().trim() || undefined : undefined;
+
+          // Find all specification columns (any column not in FIXED_COLUMNS)
+          const specColumns = Object.keys(row).filter(col => !FIXED_COLUMNS.has(col));
+
+          if (specColumns.length === 0) {
+            // No spec columns found — skip this row
+            continue;
+          }
+
+          for (const specCol of specColumns) {
+            const qty = parseFloat(row[specCol]);
+            if (!qty || qty <= 0) continue; // Skip if no valid quantity
+
+            parsedItems.push({
+              id: `pending-${Math.random().toString(36).substr(2, 9)}`,
+              name: itemName,
+              quantity: qty,
+              unit: unit,
+              lotNumber: lotNumber,
+              specification: specCol.toString().trim(),
+              source: 'EXCEL' as const,
+            });
+          }
+        }
+
+        if (parsedItems.length === 0) {
+          alert("No valid items found in the Excel file. Please check the format:\nColumns: Product, Code, UNIT, Lot (optional), then quantity columns named by specification (e.g. 2.2, 3.1)");
+        } else {
+          onAddPending(parsedItems);
+        }
       } catch (error) {
         console.error("Excel parse error", error);
         alert("Failed to parse Excel file. Check format.");
