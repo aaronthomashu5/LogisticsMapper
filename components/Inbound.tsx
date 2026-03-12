@@ -55,7 +55,7 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
         const data = XLSX.utils.sheet_to_json(ws);
 
         // Fixed/known columns that are NOT specification columns
-        const FIXED_COLUMNS = new Set(['Product', 'Code', 'UNIT', 'Lot', 'QTY']);
+        const FIXED_COLUMNS = new Set(['Product', 'Code', 'UNIT', 'Lot']);
 
         const parsedItems: PendingItem[] = [];
 
@@ -75,26 +75,14 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
           // Find all specification columns (any column not in FIXED_COLUMNS)
           const specColumns = Object.keys(row).filter(col => !FIXED_COLUMNS.has(col));
 
-          if (specColumns.length > 0) {
-            // Preferred format: each spec column (e.g. 2.2, 3.1) creates a separate PendingItem
-            for (const specCol of specColumns) {
-              const qty = parseFloat(row[specCol]);
-              if (!qty || qty <= 0) continue; // Skip if no valid quantity
+          if (specColumns.length === 0) {
+            // No spec columns found — skip this row
+            continue;
+          }
 
-              parsedItems.push({
-                id: `pending-${Math.random().toString(36).substr(2, 9)}`,
-                name: itemName,
-                quantity: qty,
-                unit: unit,
-                lotNumber: lotNumber,
-                specification: specCol.toString().trim(),
-                source: 'EXCEL' as const,
-              });
-            }
-          } else {
-            // Fallback format: no spec columns — use QTY column if present
-            const qty = parseFloat(row['QTY']);
-            if (!qty || qty <= 0) continue; // Skip if no valid QTY
+          for (const specCol of specColumns) {
+            const qty = parseFloat(row[specCol]);
+            if (!qty || qty <= 0) continue; // Skip if no valid quantity
 
             parsedItems.push({
               id: `pending-${Math.random().toString(36).substr(2, 9)}`,
@@ -102,13 +90,14 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
               quantity: qty,
               unit: unit,
               lotNumber: lotNumber,
+              specification: specCol.toString().trim(),
               source: 'EXCEL' as const,
             });
           }
         }
 
         if (parsedItems.length === 0) {
-          alert("No valid items found in the Excel file. Please check the format:\nOption 1 – Spec columns: Product, Code, UNIT, Lot (optional), then quantity columns named by specification (e.g. 2.2, 3.1)\nOption 2 – QTY column: Product, Code, UNIT, Lot (optional), QTY");
+          alert("No valid items found in the Excel file. Please check the format:\nColumns: Product, Code, UNIT, Lot (optional), then quantity columns named by specification (e.g. 2.2, 3.1)");
         } else {
           onAddPending(parsedItems);
         }
