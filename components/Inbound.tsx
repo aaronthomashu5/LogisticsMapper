@@ -55,7 +55,7 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
         const data = XLSX.utils.sheet_to_json(ws);
 
         // Fixed/known columns that are NOT specification columns
-        const FIXED_COLUMNS = new Set(['Product', 'Code', 'UNIT', 'Lot']);
+        const FIXED_COLUMNS = new Set(['Product', 'Code', 'UNIT', 'Lot', 'QTY']);
 
         const parsedItems: PendingItem[] = [];
 
@@ -75,29 +75,53 @@ export const Inbound: React.FC<InboundProps> = ({ layouts, pendingItems, onAddPe
           // Find all specification columns (any column not in FIXED_COLUMNS)
           const specColumns = Object.keys(row).filter(col => !FIXED_COLUMNS.has(col));
 
-          if (specColumns.length === 0) {
-            // No spec columns found — skip this row
-            continue;
-          }
+          // Filter to spec columns that have valid (non-NA, positive) quantities
+          const validSpecColumns = specColumns.filter(col => {
+            const val = row[col];
+            if (val === null || val === undefined) return false;
+            const strVal = val.toString().trim().toUpperCase();
+            if (strVal === 'NA' || strVal === 'N/A' || strVal === '') return false;
+            const qty = parseFloat(strVal);
+            return !isNaN(qty) && qty > 0;
+          });
 
-          for (const specCol of specColumns) {
-            const qty = parseFloat(row[specCol]);
-            if (!qty || qty <= 0) continue; // Skip if no valid quantity
+          if (validSpecColumns.length > 0) {
+            // Format 1: specification columns (e.g. 2.2, 3.1) with quantities
+            for (const specCol of validSpecColumns) {
+              const qty = parseFloat(row[specCol].toString());
+              parsedItems.push({
+                id: `pending-${Math.random().toString(36).substring(2, 11)}`,
+                name: itemName,
+                quantity: qty,
+                unit: unit,
+                lotNumber: lotNumber,
+                specification: specCol.toString().trim(),
+                source: 'EXCEL' as const,
+              });
+            }
+          } else {
+            // Format 2: direct QTY column (spec columns absent or all NA)
+            const qtyRaw = row['QTY'];
+            if (qtyRaw === null || qtyRaw === undefined) continue;
+            const qtyStr = qtyRaw.toString().trim().toUpperCase();
+            if (qtyStr === 'NA' || qtyStr === 'N/A' || qtyStr === '') continue;
+            const qty = parseFloat(qtyStr);
+            if (!qty || qty <= 0) continue;
 
             parsedItems.push({
-              id: `pending-${Math.random().toString(36).substr(2, 9)}`,
+              id: `pending-${Math.random().toString(36).substring(2, 11)}`,
               name: itemName,
               quantity: qty,
               unit: unit,
               lotNumber: lotNumber,
-              specification: specCol.toString().trim(),
+              specification: undefined,
               source: 'EXCEL' as const,
             });
           }
         }
 
         if (parsedItems.length === 0) {
-          alert("No valid items found in the Excel file. Please check the format:\nColumns: Product, Code, UNIT, Lot (optional), then quantity columns named by specification (e.g. 2.2, 3.1)");
+          alert("No valid items found in the Excel file. Please check the format:\nFormat 1: Product, Code, UNIT, Lot (optional), then quantity columns by specification (e.g. 2.2, 3.1)\nFormat 2: Product, Code, UNIT, Lot (optional), QTY");
         } else {
           onAddPending(parsedItems);
         }
